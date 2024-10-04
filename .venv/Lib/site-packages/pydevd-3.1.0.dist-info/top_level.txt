@@ -1,0 +1,15 @@
+_pydev_bundle
+_pydev_runfiles
+_pydevd_bundle
+_pydevd_frame_eval
+_pydevd_sys_monitoring
+pydev_app_engine_debug_startup
+pydev_ipython
+pydev_run_in_console
+pydevconsole
+pydevd
+pydevd_attach_to_process
+pydevd_file_utils
+pydevd_plugins
+pydevd_tracing
+setup_pydevd_cython

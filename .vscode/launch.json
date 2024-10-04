@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+
+        {
+            "name": "Launch Node Program",
+            "type": "node",
+            "request": "launch",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${file}",
+            "outFiles": [
+                "${workspaceFolder}/**/*.js"
+            ]
+        },
+        {
+            "name": "Python: Language Server",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/advanced_copilot/language_server/server.py",
+            "console": "integratedTerminal",
+            "host": "127.0.0.1",
+            "justMyCode": false
+        }
+    ]
+}

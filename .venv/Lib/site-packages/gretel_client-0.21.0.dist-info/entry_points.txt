@@ -1,0 +1,3 @@
+[console_scripts]
+gretel = gretel_client.cli.cli:cli
+

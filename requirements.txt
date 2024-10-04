@@ -1,0 +1,12 @@
+torch==2.2.0
+transformers==4.15.0
+sentence-transformers==2.1.0
+faiss-cpu==1.8.0
+flask==2.0.2
+python-dotenv==0.19.2
+sqlalchemy==1.4.27
+pyjwt==2.3.0
+requests==2.26.0
+numpy==1.23.5
+torch==2.0.1
+datasets==2.13.0
