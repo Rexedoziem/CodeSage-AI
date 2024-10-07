@@ -1,47 +1,116 @@
 import asyncio
+import json
+import logging
+from typing import Dict, List, Optional, Any
+import configparser
 from pylsp import uris
-from pylsp.config import config
 from pylsp.workspace import Document
 from pylsp.python_lsp import PythonLSPServer
-from typing import Optional, Dict, List
+from security.auth import AuthManager
+from security.user_store import UserStore
 from completion_provider import CompletionProvider
-from advanced_copilot.model.rag.retriever import CodeRetriever
-import config
-from advanced_copilot.model.architecture.llama2_model import LLaMA2CodeCompletion
-from io import StringIO  # Import StringIO from the io module
+
+# Default configuration
+DEFAULT_CONFIG = {
+    'DatabasePath': 'user_data.db',
+    'SecretKey': 'default_secret_key',
+    'ModelPath': 'Rexe/llama-3.1-codegen-merged',
+    'Device': 'cpu'
+}
+
+config = configparser.ConfigParser()
+config['DEFAULT'] = DEFAULT_CONFIG
+
+# Try to read from config file, use defaults if not found
+config.read('config.ini')
 
 class CopilotLanguageServer(PythonLSPServer):
     def __init__(self, rx, tx):
         super().__init__(rx, tx)
-        # Initialize these with proper paths and models
-        self.retriever = CodeRetriever()  
-        self.completion_provider = CompletionProvider('Rexe/llama-3.1-codegen-merged', device='cpu')
+        self.user_store = UserStore(config['DEFAULT']['DatabasePath'])
+        self.auth_manager = AuthManager(secret_key=config['DEFAULT']['SecretKey'], user_store=self.user_store)
+        self.completion_provider: Optional[CompletionProvider] = None
+        self.current_user: Optional[str] = None
+        self.logger = logging.getLogger(__name__)
 
-    def capabilities(self):
-        return {
-            'textDocumentSync': {
-                'change': 2,
-                'save': {
-                    'includeText': False
-                },
-                'openClose': True,
-            },
-            'completionProvider': {
-                'triggerCharacters': ['.']
-            }
-        }
+    async def start(self):
+        self.logger.info("Starting CopilotLanguageServer")
+        try:
+            await super().start()
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            self.logger.info("Server received cancellation request")
+        except Exception as e:
+            self.logger.error(f"Error in server: {str(e)}")
+            raise
+        finally:
+            self.logger.info("Server shutting down")
 
-    async def completions(self, params: Dict) -> List[Dict]:
+    async def __aenter__(self):
+        self.logger.info("Entering CopilotLanguageServer context")
+        # Initialize any resources that need async setup
+        self.completion_provider = CompletionProvider(
+            config['DEFAULT']['ModelPath'], 
+            device=config['DEFAULT']['Device'],
+            token="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"
+        )
+        await self.completion_provider.initialize()  # Assuming there's an async initialize method
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.logger.info("Exiting CopilotLanguageServer context")
+        # Cleanup resources
+        if self.completion_provider:
+            await self.completion_provider.close()
+        if self.user_store:
+            await self.user_store.close()  # Assuming there's an async close method
+        if exc_type:
+            self.logger.error(f"An error occurred: {exc_type.__name__}: {exc_val}")
+        return False  # Propagate exceptions
+
+
+    async def initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        result = await super().initialize(params)
+        self.logger.info("Copilot Language Server initializing")
+        return result
+
+    async def initialized(self):
+        await super().initialized()
+        self.logger.info("Copilot Language Server initialized")
+
+    async def authenticate(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            token = params.get('token')
+            if not token:
+                return {"success": False, "message": "No token provided"}
+            username = self.auth_manager.verify_token(token)
+            if not username:
+                return {"success": False, "message": "Invalid token"}
+            await self.initialize_user_session(username)
+            return {"success": True, "message": f"Authenticated as {username}"}
+        except Exception as e:
+            self.logger.error(f"Authentication error: {str(e)}")
+            return {"success": False, "message": "Authentication failed"}
+
+    async def initialize_user_session(self, username: str):
+        self.completion_provider = CompletionProvider(config['DEFAULT']['ModelPath'], device=config['DEFAULT']['Device'])
+        self.current_user = username
+        self.logger.info(f"User session initialized for {username}")
+
+    async def completions(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not self.completion_provider or not self.current_user:
+            self.logger.warning("Completion requested but user is not authenticated")
+            return []
+
         uri = params['textDocument']['uri']
         position = params['position']
-        doc = self.workspace.get_document(uri)
-        
-        user_id = self.get_user_id(doc)
-        code_context = self.get_code_context(doc, position)
+        document = self.workspace.get_document(uri)
+        code_context = self.get_code_context(document, position)
 
         completions = []
         async for completion, language in self.completion_provider.get_completions(
-            user_id=user_id,
+            user_id=self.current_user,
             code_context=code_context
         ):
             completions.append({
@@ -50,43 +119,80 @@ class CopilotLanguageServer(PythonLSPServer):
                 'detail': f'Copilot suggestion ({language})',
                 'insertText': completion
             })
+
         return completions
 
-    def get_user_id(self, document: Document) -> str:
-        # Method 1: From workspace configuration
-        config = self.workspace.get_configuration(document.uri)
-        user_id = config.get('userId')
-        if user_id:
-            return user_id
-
-        # Method 2: From environment variable
-        import os
-        user_id = os.environ.get('LSP_USER_ID')
-        if user_id:
-            return user_id
-
-        # Method 3: From a file in the workspace
-        from pathlib import Path
-        workspace_root = Path(uris.to_fs_path(document.uri)).parent
-        user_id_file = workspace_root / '.lsp_user_id'
-        if user_id_file.exists():
-            with open(user_id_file, 'r') as f:
-                return f.read().strip()
-
-        # Fallback: Use document path as a simple user ID
-        return document.path
-
-    def get_code_context(self, document: Document, position: Dict) -> str:
-        # Get all lines up to the current position
+    def get_code_context(self, document: Document, position: Dict[str, int]) -> str:
         lines = document.lines[:position['line'] + 1]
-        
-        # For the current line, only include up to the cursor position
         lines[-1] = lines[-1][:position['character']]
-        
         return '\n'.join(lines)
 
-# Mock rx and tx for testing purposes
-rx = StringIO()  # Mock receive channel
-tx = StringIO()  # Mock transmit channel
+    def capabilities(self) -> Dict[str, Any]:
+        return {
+            'textDocumentSync': {
+                'change': 2,  # Incremental
+                'save': {
+                    'includeText': False
+                },
+                'openClose': True,
+            },
+            'completionProvider': {
+                'triggerCharacters': ['.']
+            },
+            'executeCommandProvider': {
+                'commands': ['copilot.authenticate', 'copilot.signOut']
+            }
+        }
 
-server = CopilotLanguageServer(rx, tx)
+    async def execute_command(self, params: Dict[str, Any]) -> None:
+        command = params['command']
+        if command == 'copilot.authenticate':
+            result = await self.authenticate(params.get('arguments', [{}])[0])
+            await self.send_notification("copilot/authenticationStatus", result)
+        elif command == 'copilot.signOut':
+            self.current_user = None
+            self.completion_provider = None
+            await self.send_notification("copilot/authenticationStatus", {"success": True, "message": "Signed out successfully"})
+
+    async def send_notification(self, method: str, params: Dict[str, Any]):
+        notification = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        }
+        await self.write_notification(notification)
+
+    async def write_notification(self, notification: Dict[str, Any]):
+        await self.transport.write(json.dumps(notification).encode() + b'\r\n')
+
+async def run_server():
+    logger = logging.getLogger(__name__)
+    logger.info("Initializing server")
+    try:
+        reader = asyncio.StreamReader()
+        loop = asyncio.get_running_loop()
+        transport = asyncio.WriteTransport()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+        
+        async with CopilotLanguageServer(reader, writer) as server:
+            logger.info("Server initialized, starting main loop")
+            await server.start()
+    except Exception as e:
+        logger.error(f"Server error: {str(e)}", exc_info=True)
+    finally:
+        logger.info("Server shutting down")
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Starting main function")
+    try:
+        asyncio.run(run_server())
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt, shutting down")
+    except Exception as e:
+        logger.error(f"Unhandled exception in main: {str(e)}", exc_info=True)
+    finally:
+        logger.info("Main function completed")

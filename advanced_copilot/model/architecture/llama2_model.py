@@ -3,9 +3,9 @@ from typing import List
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 class LLaMA2CodeCompletion:
-    def __init__(self, model_path: str, device: str):
-        self.model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+    def __init__(self, model_path: str, device: str, token: str):
+        self.model = AutoModelForCausalLM.from_pretrained(model_path, token=token).to(device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, token=token)
         self.device = device
 
     async def generate(self, prompt: str, max_length: int = 50, num_return_sequences: int = 1) -> List[str]:

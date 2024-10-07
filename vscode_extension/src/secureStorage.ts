@@ -15,4 +15,8 @@ export class SecureStorage {
     public async getSecret(key: string): Promise<string | undefined> {
         return await this.storage.get(key);
     }
+
+    public async deleteSecret(key: string) {
+        await this.storage.delete(key);
+    }
 }

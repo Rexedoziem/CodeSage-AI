@@ -9,6 +9,7 @@ import { SecureStorage } from './secureStorage';
 import { TelemetryService } from './telemetryService';
 
 let client: LanguageClient;
+let token: string | null = null;
 let feedbackManager: FeedbackManager;
 let secureStorage: SecureStorage;
 let telemetryService: TelemetryService;
@@ -41,8 +42,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register commands
     context.subscriptions.push(
-        vscode.commands.registerCommand('advancedPythonCopilot.signIn', signIn),
-        vscode.commands.registerCommand('advancedPythonCopilot.signOut', signOut),
+        vscode.commands.registerCommand('advancedPythonCopilot.register', registerUser),
+        vscode.commands.registerCommand('advancedPythonCopilot.login', loginUser),
         vscode.commands.registerCommand('advancedPythonCopilot.getCompletion', debounce(getCompletion, 300)),
         vscode.commands.registerCommand('advancedPythonCopilot.getCompletionAndFixes', debounce(getCompletionAndFixes, 300))
     );
@@ -55,12 +56,6 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(completionProvider);
-
-    // Check for existing authentication
-    checkAuthentication();
-
-    // Listen for authentication status notifications from the server
-    client.onNotification('copilot/authenticationStatus', handleAuthStatusNotification);
 }
 
 class CompletionProvider implements vscode.CompletionItemProvider {
@@ -76,19 +71,18 @@ class CompletionProvider implements vscode.CompletionItemProvider {
         }
 
         try {
-            const response: any[] = await client.sendRequest('completions', {
-                textDocument: { uri: document.uri.toString() },
-                position: { line: position.line, character: position.character }
+            const response = await axios.post('http://localhost:8080/complete', {
+                code_context: document.getText(),
+                user_id: await this.getUserId()
             });
 
-            telemetryService.trackEvent('completion', { status: 'success' });
+            telemetryService.trackEvent('completion', { status: response.status.toString() });
 
-            return response.map((item: any) => {
-                const completionItem = new vscode.CompletionItem(item.label);
-                completionItem.kind = vscode.CompletionItemKind.Snippet;
-                completionItem.insertText = item.insertText;
-                completionItem.detail = item.detail;
-                return completionItem;
+            return response.data.map((suggestion: string) => {
+                const item = new vscode.CompletionItem(suggestion);
+                item.kind = vscode.CompletionItemKind.Snippet;
+                item.insertText = suggestion;
+                return item;
             });
         } catch (error: unknown) {
             console.error('Error fetching completions:', error);
@@ -99,88 +93,95 @@ class CompletionProvider implements vscode.CompletionItemProvider {
             }
             return [];
         }
-    }}
+    }
 
-async function signIn() {
-    const result = await vscode.authentication.getSession('github', ['read:user'], { createIfNone: true });
-    if (result) {
-        const token = result.accessToken;
-        await client.sendRequest('copilot.authenticate', { token });
-    } else {
-        vscode.window.showErrorMessage('Failed to authenticate with GitHub.');
+    private async getUserId(): Promise<string> {
+        const session = await vscode.authentication.getSession('your-auth-provider-id', ['user-read']);
+        return session ? session.id : 'anonymous';
     }
 }
 
-async function signOut() {
-    await client.sendRequest('copilot.signOut');
-    await secureStorage.deleteSecret('userToken');
-    vscode.window.showInformationMessage('Signed out successfully.');
-}
-
-async function checkAuthentication() {
-    const storedToken = await secureStorage.getSecret('userToken');
-    if (storedToken) {
-        await client.sendRequest('copilot.authenticate', { token: storedToken });
-    } else {
-        showSignInPrompt();
-    }
-}
-
-function showSignInPrompt() {
-    vscode.window.showInformationMessage(
-        'Sign in to use Advanced Python Copilot',
-        'Sign In'
-    ).then(selection => {
-        if (selection === 'Sign In') {
-            vscode.commands.executeCommand('advancedPythonCopilot.signIn');
+async function registerUser() {
+    const username = await vscode.window.showInputBox({ prompt: 'Enter username' });
+    const password = await vscode.window.showInputBox({ prompt: 'Enter password', password: true });
+    if (username && password) {
+        const result = await client.sendRequest('register', { username, password });
+        if (result) {
+            vscode.window.showInformationMessage('Registration successful. Please log in.');
+        } else {
+            vscode.window.showErrorMessage('Registration failed. Username may already exist.');
         }
-    });
+    }
 }
 
-function handleAuthStatusNotification(params: { success: boolean, message: string }) {
-    if (params.success) {
-        vscode.window.showInformationMessage(params.message);
-    } else {
-        vscode.window.showErrorMessage(params.message);
-        showSignInPrompt();
+async function loginUser() {
+    const username = await vscode.window.showInputBox({ prompt: 'Enter username' });
+    const password = await vscode.window.showInputBox({ prompt: 'Enter password', password: true });
+    if (username && password) {
+        token = await client.sendRequest('login', { username, password });
+        if (token) {
+            await secureStorage.storeSecret('userToken', token);
+            vscode.window.showInformationMessage('Login successful.');
+        } else {
+            vscode.window.showErrorMessage('Login failed. Please check your credentials.');
+        }
     }
 }
 
 async function getCompletion() {
+    const storedToken = await secureStorage.getSecret('userToken');
+    if (!storedToken) {
+        vscode.window.showErrorMessage('Please log in to use the copilot.');
+        return;
+    }
+
     const editor = vscode.window.activeTextEditor;
     if (editor) {
         const position = editor.selection.active;
         const document = editor.document;
+        const codeContext = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
 
-        try {
-            const completions = await client.sendRequest('completions', {
-                textDocument: { uri: document.uri.toString() },
-                position: { line: position.line, character: position.character }
-            }) as Array<{ label: string; detail: string }>;
+        const completionStream = await client.sendRequest('getCompletionsStream', { 
+            codeContext, 
+            filePath: document.fileName 
+        }) as AsyncIterable<{ completion: string; language: string; issues: { errors: any[]; warnings: any[]; style_issues: any[]; security_issues: any[] } }>;
+        
+        const quickPick = vscode.window.createQuickPick();
+        quickPick.items = [];
+        quickPick.onDidChangeSelection(selection => {
+            if (selection[0]) {
+                editor.edit(editBuilder => {
+                    editBuilder.insert(position, selection[0].label);
+                });
+                quickPick.hide();
+                feedbackManager.recordCompletion(selection[0].label);
+            }
+        });
+        quickPick.onDidHide(() => quickPick.dispose());
+        quickPick.show();
 
-            const quickPick = vscode.window.createQuickPick();
-            quickPick.items = completions.map((item) => ({
-                label: item.label,
-                detail: item.detail
-            }));
+        for await (const { completion, language, issues } of completionStream) {
+            const issueCount = Object.values(issues).reduce((acc, val) => acc + val.length, 0);
+            const issueWarning = issueCount > 0 ? `(${issueCount} issues) ` : '';
+            quickPick.items = [...quickPick.items, { 
+                label: `${issueWarning}${completion}`,
+                description: `Language: ${language}`
+            }];
 
-            quickPick.onDidChangeSelection(selection => {
-                if (selection[0]) {
-                    editor.edit(editBuilder => {
-                        editBuilder.insert(position, selection[0].label);
-                    });
-                    quickPick.hide();
-                    feedbackManager.recordCompletion(selection[0].label);
-                }
-            });
-
-            quickPick.onDidHide(() => quickPick.dispose());
-            quickPick.show();
-        } catch (error) {
-            vscode.window.showErrorMessage('Failed to get completions. Please check your authentication status.');
+            // Show issues in Problems panel
+            const diagnostics = issues.errors.concat(issues.warnings, issues.style_issues, issues.security_issues)
+                .map((issue: { line: number; column: number; message: string }) => new vscode.Diagnostic(
+                    new vscode.Range(issue.line - 1, issue.column - 1, issue.line - 1, issue.column),
+                    issue.message,
+                    issue.message.startsWith("Error") ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning
+                ));
+            
+            vscode.languages.createDiagnosticCollection('advancedPythonCopilot')
+                .set(document.uri, diagnostics);
         }
     }
 }
+
 async function getCompletionAndFixes() {
     const editor = vscode.window.activeTextEditor;
     if (editor) {
