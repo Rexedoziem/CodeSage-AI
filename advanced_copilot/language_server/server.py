@@ -37,6 +37,12 @@ class CopilotLanguageServer(PythonLSPServer):
         self.logger.info("Starting CopilotLanguageServer")
         try:
             await super().start()
+            # Register handlers
+            self._jsonrpc_methods.update({
+                'textDocument/didChange': self.text_document_did_change,
+                'textDocument/completion': self.completions,
+                'workspace/executeCommand': self.execute_command,
+            })
             while True:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
@@ -53,9 +59,9 @@ class CopilotLanguageServer(PythonLSPServer):
         self.completion_provider = CompletionProvider(
             config['DEFAULT']['ModelPath'], 
             device=config['DEFAULT']['Device'],
-            token="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"
+            token='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'
         )
-        await self.completion_provider.initialize()  # Assuming there's an async initialize method
+        await self.completion_provider  # Assuming there's an async initialize method
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -68,7 +74,6 @@ class CopilotLanguageServer(PythonLSPServer):
         if exc_type:
             self.logger.error(f"An error occurred: {exc_type.__name__}: {exc_val}")
         return False  # Propagate exceptions
-
 
     async def initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
         result = await super().initialize(params)
@@ -94,13 +99,19 @@ class CopilotLanguageServer(PythonLSPServer):
             return {"success": False, "message": "Authentication failed"}
 
     async def initialize_user_session(self, username: str):
-        self.completion_provider = CompletionProvider(config['DEFAULT']['ModelPath'], device=config['DEFAULT']['Device'])
+        if not self.completion_provider:
+            self.completion_provider = CompletionProvider(
+                config['DEFAULT']['ModelPath'], 
+                device=config['DEFAULT']['Device'],
+                token='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'
+            )
+            #await self.completion_provider.initialize()  # Assuming there's an async initialize method
         self.current_user = username
         self.logger.info(f"User session initialized for {username}")
 
     async def completions(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not self.completion_provider or not self.current_user:
-            self.logger.warning("Completion requested but user is not authenticated")
+            self.logger.warning("Completion requested but user is not authenticated or CompletionProvider not initialized")
             return []
 
         uri = params['textDocument']['uri']
@@ -109,16 +120,19 @@ class CopilotLanguageServer(PythonLSPServer):
         code_context = self.get_code_context(document, position)
 
         completions = []
-        async for completion, language in self.completion_provider.get_completions(
-            user_id=self.current_user,
-            code_context=code_context
-        ):
-            completions.append({
-                'label': completion,
-                'kind': 15,  # Snippet
-                'detail': f'Copilot suggestion ({language})',
-                'insertText': completion
-            })
+        try:
+            async for completion, language in self.completion_provider.get_completions(
+                user_id=self.current_user,
+                code_context=code_context
+            ):
+                completions.append({
+                    'label': completion,
+                    'kind': 15,  # Snippet
+                    'detail': f'Copilot suggestion ({language})',
+                    'insertText': completion
+                })
+        except Exception as e:
+            self.logger.error(f"Error getting completions: {str(e)}")
 
         return completions
 
@@ -128,7 +142,8 @@ class CopilotLanguageServer(PythonLSPServer):
         return '\n'.join(lines)
 
     def capabilities(self) -> Dict[str, Any]:
-        return {
+        capabilities = super().capabilities()
+        capabilities.update({
             'textDocumentSync': {
                 'change': 2,  # Incremental
                 'save': {
@@ -137,12 +152,13 @@ class CopilotLanguageServer(PythonLSPServer):
                 'openClose': True,
             },
             'completionProvider': {
-                'triggerCharacters': ['.']
+                'triggerCharacters': ['.', ' ']  # Trigger on space for in-line completions
             },
             'executeCommandProvider': {
                 'commands': ['copilot.authenticate', 'copilot.signOut']
             }
-        }
+        })
+        return capabilities
 
     async def execute_command(self, params: Dict[str, Any]) -> None:
         command = params['command']
@@ -153,6 +169,18 @@ class CopilotLanguageServer(PythonLSPServer):
             self.current_user = None
             self.completion_provider = None
             await self.send_notification("copilot/authenticationStatus", {"success": True, "message": "Signed out successfully"})
+
+    async def text_document_did_change(self, params: Dict[str, Any]):
+        await super().text_document_did_change(params)
+        # Trigger completion after each change
+        uri = params['textDocument']['uri']
+        position = params['contentChanges'][-1]['range']['end']
+        completions = await self.completions({
+            'textDocument': {'uri': uri},
+            'position': position
+        })
+        if completions:
+            await self.send_notification("textDocument/completion", {'items': completions})
 
     async def send_notification(self, method: str, params: Dict[str, Any]):
         notification = {

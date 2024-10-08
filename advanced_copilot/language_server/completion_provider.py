@@ -16,7 +16,7 @@ class CompletionProvider:
     def __init__(self, base_model_path: str, device: str, token: str): #rag_model_path: str, device: str
         self.base_model = LLaMA2CodeCompletion('Rexe/llama-3.1-codegen-merged', device='cpu', token="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")
         #self.rag_model = RAGModel(rag_model_path, device)
-        self.adaptive_learning = AdaptiveLearningManager(self.rag_model)
+        self.adaptive_learning = AdaptiveLearningManager(self.base_model)
         self.language_detector = LanguageDetector()
         self.cache = Cache()
         self.filter = CompletionFilter()
@@ -77,4 +77,5 @@ class CompletionProvider:
 
     @RequestThrottler.throttle
     async def update_user_model(self, user_id: str, code_snippet: str, accepted: bool):
-        await self.adaptive_learning.update_user_model(user_id, code_snippet, accepted)
+        adaptive_learning.update_user_model(user_id, code_snippet, accepted)
+
