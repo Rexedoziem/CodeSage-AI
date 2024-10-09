@@ -21,9 +21,6 @@ DEFAULT_CONFIG = {
 config = configparser.ConfigParser()
 config['DEFAULT'] = DEFAULT_CONFIG
 
-# Try to read from config file, use defaults if not found
-config.read('config.ini')
-
 class CopilotLanguageServer(PythonLSPServer):
     def __init__(self, rx, tx):
         super().__init__(rx, tx)
