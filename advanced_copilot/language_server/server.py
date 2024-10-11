@@ -56,7 +56,7 @@ class CopilotLanguageServer(PythonLSPServer):
         self.completion_provider = CompletionProvider(
             config['DEFAULT']['ModelPath'], 
             device=config['DEFAULT']['Device'],
-            token='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'
+            token=''
         )
         await self.completion_provider  # Assuming there's an async initialize method
         return self

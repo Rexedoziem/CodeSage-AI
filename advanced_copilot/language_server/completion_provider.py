@@ -14,7 +14,7 @@ from error_fixer import ErrorFixer
 
 class CompletionProvider:
     def __init__(self, base_model_path: str, device: str, token: str): #rag_model_path: str, device: str
-        self.base_model = LLaMA2CodeCompletion('Rexe/llama-3.1-codegen-merged', device='cpu', token="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")
+        self.base_model = LLaMA2CodeCompletion('Rexe/llama-3.1-codegen-merged', device='cpu', token="")
         #self.rag_model = RAGModel(rag_model_path, device)
         self.adaptive_learning = AdaptiveLearningManager(self.base_model)
         self.language_detector = LanguageDetector()
