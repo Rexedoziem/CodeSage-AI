@@ -77,5 +77,5 @@ class CompletionProvider:
 
     @RequestThrottler.throttle
     async def update_user_model(self, user_id: str, code_snippet: str, accepted: bool):
-        adaptive_learning.update_user_model(user_id, code_snippet, accepted)
+        self.adaptive_learning.update_user_model(user_id, code_snippet, accepted)
 

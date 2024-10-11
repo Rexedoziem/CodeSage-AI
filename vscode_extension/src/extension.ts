@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
 import { debounce } from 'lodash';
-import axios from 'axios';
+//import axios from 'axios';
 
 // Import custom classes
 import { FeedbackManager } from './feedbackManager';

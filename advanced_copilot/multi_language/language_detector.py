@@ -13,17 +13,17 @@ class LanguageDetector:
             'rust': re.compile(r'\.rs$|^fn\s+\w+\s*\(|^let\s+mut\s+\w+|^impl\s+\w+\s+for'),
         }
 
-    def detect_language(self, code_or_file: str) -> str:
-        if os.path.isfile(code_or_file):
-            with open(code_or_file, 'r') as file:
+    def detect_language(self, code_file: str) -> str:
+        if os.path.isfile(code_file):
+            with open(code_file, 'r') as file:
                 code = file.read()
             # Check file extension first
-            _, file_extension = os.path.splitext(code_or_file)
+            _, file_extension = os.path.splitext(code_file)
             for lang, pattern in self.language_patterns.items():
                 if pattern.search(file_extension):
                     return lang
         else:
-            code = code_or_file
+            code = code_file
 
         code = self._preprocess_code(code)
         scores = {lang: 0 for lang in self.language_patterns}

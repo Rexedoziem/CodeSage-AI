@@ -3,7 +3,7 @@ import ast
 import tempfile
 import subprocess
 import astroid
-#from pylint import epylint as lint
+from pylint import epylint as lint
 from pyflakes.api import check as pyflakes_check
 from pycodestyle import Checker as PEP8Checker
 from advanced_copilot.multi_language.language_detector import LanguageDetector
